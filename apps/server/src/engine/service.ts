@@ -31,6 +31,7 @@ import type { Store } from "../db.ts";
 import { AppError } from "../errors.ts";
 import type { Files } from "../files.ts";
 import { backgroundFailure } from "../log.ts";
+import { McpService } from "../mcp.ts";
 import { SearchService } from "../search.ts";
 import type { WorkspaceService } from "../workspace.ts";
 import { analyzeSpending } from "./finance.ts";
@@ -52,6 +53,7 @@ const terminal = new Set(["succeeded", "failed", "cancelled"]);
 export class AgentService {
   readonly worker: TaskWorker;
   readonly search: SearchService;
+  readonly mcp: McpService;
   private maintenance?: ReturnType<typeof setInterval>;
   private refreshing = false;
   constructor(
@@ -64,12 +66,15 @@ export class AgentService {
     readonly computer: ComputerService = new ComputerService(db, config),
   ) {
     this.search = new SearchService(db);
+    this.mcp = new McpService(config);
     this.worker = new TaskWorker(db, (owner, task, context) => this.execute(owner, task, context), {
       settled: (owner, task) => this.publishOutcome(owner, task),
     });
   }
   start() {
     this.worker.start();
+    if (this.config.mcpEnabled)
+      void this.mcp.refresh().catch((error) => backgroundFailure("mcp refresh", error));
     // Maintenance is independent of the HTTP response and reconciles durable records.
     void this.maintain().catch((error) => backgroundFailure("initial maintenance", error));
     this.maintenance = setInterval(() => {
@@ -79,6 +84,7 @@ export class AgentService {
   async stop() {
     if (this.maintenance) clearInterval(this.maintenance);
     this.maintenance = undefined;
+    await this.mcp.closeAll();
     await this.worker.stop();
     while (this.refreshing) await new Promise((resolve) => setTimeout(resolve, 10));
   }

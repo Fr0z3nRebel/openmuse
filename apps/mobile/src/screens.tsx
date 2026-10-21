@@ -3,6 +3,7 @@ import * as FileSystem from "expo-file-system/legacy";
 import {
   ArrowDownToLine,
   ArrowUpRight,
+  Blocks,
   CalendarDays,
   Check,
   CheckCheck,
@@ -27,6 +28,7 @@ import {
   Linking,
   Platform,
   Pressable,
+  Switch,
   Text,
   TextInput,
   useWindowDimensions,
@@ -1317,6 +1319,7 @@ export function ConnectionsScreen({ query = "" }: { query?: string }) {
           </View>
         );
       })}
+      <McpServersSection />
       {!rows.length && <Text style={s.muted}>No matching connectors.</Text>}
       {selected && (
         <Sheet
@@ -1387,6 +1390,118 @@ export function ConnectionsScreen({ query = "" }: { query?: string }) {
           )}
         </Sheet>
       )}
+    </View>
+  );
+}
+interface McpServerRow {
+  name: string;
+  transport: "stdio" | "http";
+  target: string;
+  enabled: boolean;
+  connected: boolean;
+  tools: string[];
+  error?: string;
+}
+function McpServersSection() {
+  const { api, notify } = useWorkspace();
+  const [servers, setServers] = useState<McpServerRow[]>();
+  const [failed, setFailed] = useState(false);
+  async function load() {
+    try {
+      const result = await api.request<{ servers: McpServerRow[] }>("/api/mcp/servers");
+      setServers(result.servers);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  async function toggle(server: McpServerRow, enabled: boolean) {
+    setServers((current) =>
+      current?.map((row) => (row.name === server.name ? { ...row, enabled } : row)),
+    );
+    try {
+      await api.request(`/api/mcp/servers/${encodeURIComponent(server.name)}/enabled`, {
+        enabled,
+      });
+      await load();
+      notify(
+        enabled
+          ? `${server.name} is on. Its tools join your next chat message.`
+          : `${server.name} is off. Its tools leave your next chat message.`,
+      );
+    } catch (e) {
+      await load();
+      notify(e instanceof Error ? e.message : String(e));
+    }
+  }
+  if (failed) return null;
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={[s.small, { marginLeft: 12 }]}>MCP servers</Text>
+      <View style={{ paddingHorizontal: 16, borderRadius: 23, backgroundColor: "#F3F4F5" }}>
+        {servers === undefined ? (
+          <View style={[s.row, { minHeight: 61 }]}>
+            <ActivityIndicator />
+          </View>
+        ) : servers.length ? (
+          servers.map((server, index) => (
+            <View
+              key={server.name}
+              style={[
+                s.row,
+                {
+                  gap: 14,
+                  minHeight: 61,
+                  paddingVertical: 8,
+                  borderBottomWidth: index < servers.length - 1 ? 1 : 0,
+                  borderBottomColor: "#E5E7E9",
+                },
+              ]}
+            >
+              <View
+                style={{
+                  width: 29,
+                  height: 29,
+                  borderRadius: 7,
+                  backgroundColor: "#FFF",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Blocks size={23} color="#6866A6" />
+              </View>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={s.text}>{server.name}</Text>
+                <Text style={s.small}>
+                  {!server.enabled
+                    ? "Off"
+                    : server.connected
+                      ? `Connected · ${server.tools.length} tool${server.tools.length === 1 ? "" : "s"}`
+                      : (server.error ?? "Not connected")}
+                </Text>
+              </View>
+              <Switch
+                value={server.enabled}
+                onValueChange={(value) => void toggle(server, value)}
+                accessibilityLabel={`Toggle ${server.name}`}
+              />
+            </View>
+          ))
+        ) : (
+          <View style={{ paddingVertical: 14 }}>
+            <Text style={s.muted}>
+              None installed yet. Ask in chat to install one, or add it to .openmuse/mcp.json on the
+              server.
+            </Text>
+          </View>
+        )}
+      </View>
+      <Text style={[s.small, { marginLeft: 12 }]}>
+        Turning a server off removes its tools from the model's context on the next message.
+      </Text>
     </View>
   );
 }

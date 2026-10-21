@@ -24,6 +24,7 @@ import { AgentService } from "./engine/service.ts";
 import { AppError } from "./errors.ts";
 import { Files } from "./files.ts";
 import { GoogleAuth } from "./google-auth.ts";
+import { mcpInstallSchema } from "./mcp.ts";
 import { rateLimit } from "./rate-limit.ts";
 import { WorkspaceService } from "./workspace.ts";
 
@@ -285,6 +286,24 @@ export async function createApp(
       await db.put(c.get("owner"), "settings", { id: "google", enabled: false });
     else await google.disconnect(c.get("owner"));
     return c.json({ ok: true });
+  });
+  app.get("/api/mcp/servers", async (c) => {
+    if (!config.mcpEnabled) throw new AppError("MCP support is disabled", 404);
+    return c.json({ servers: agent.mcp.list() });
+  });
+  app.post("/api/mcp/servers", async (c) => {
+    if (!config.mcpEnabled) throw new AppError("MCP support is disabled", 404);
+    const body = mcpInstallSchema.parse(await c.req.json());
+    return c.json(await agent.mcp.install(body), 201);
+  });
+  app.post("/api/mcp/servers/:name/enabled", async (c) => {
+    if (!config.mcpEnabled) throw new AppError("MCP support is disabled", 404);
+    const body = z.object({ enabled: z.boolean() }).parse(await c.req.json());
+    return c.json(await agent.mcp.setEnabled(c.req.param("name"), body.enabled));
+  });
+  app.delete("/api/mcp/servers/:name", async (c) => {
+    if (!config.mcpEnabled) throw new AppError("MCP support is disabled", 404);
+    return c.json(await agent.mcp.remove(c.req.param("name")));
   });
   app.post("/api/browsers", async (c) => {
     const body = z.object({ url: z.url().max(4096) }).parse(await c.req.json());

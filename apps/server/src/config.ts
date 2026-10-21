@@ -51,6 +51,8 @@ export interface Config {
   workerToken?: string;
   taskWorkerEnabled?: boolean;
   webSearchEnabled?: boolean;
+  mcpEnabled?: boolean;
+  mcpConfigPath?: string;
   computerEnabled?: boolean;
   computerImage?: string;
   computerDeploymentId?: string;
@@ -157,6 +159,8 @@ export function readConfig(): Config {
     workerToken: process.env.WORKER_TOKEN,
     taskWorkerEnabled: process.env.TASK_WORKER_ENABLED !== "false",
     webSearchEnabled: process.env.WEB_SEARCH_ENABLED !== "false",
+    mcpEnabled: process.env.MCP_ENABLED !== "false",
+    mcpConfigPath: process.env.MCP_CONFIG_PATH?.trim() || undefined,
     computerEnabled: process.env.COMPUTER_ENABLED === "true",
     computerImage: process.env.COMPUTER_IMAGE ?? "openmuse-computer:local",
     computerDeploymentId: process.env.COMPUTER_DEPLOYMENT_ID,
