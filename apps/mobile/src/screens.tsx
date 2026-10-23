@@ -19,6 +19,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Upload,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
@@ -1320,6 +1321,7 @@ export function ConnectionsScreen({ query = "" }: { query?: string }) {
         );
       })}
       <McpServersSection />
+      <UploadsSection />
       {!rows.length && <Text style={s.muted}>No matching connectors.</Text>}
       {selected && (
         <Sheet
@@ -1501,6 +1503,153 @@ function McpServersSection() {
       </View>
       <Text style={[s.small, { marginLeft: 12 }]}>
         Turning a server off removes its tools from the model's context on the next message.
+      </Text>
+    </View>
+  );
+}
+interface UploadRow {
+  name: string;
+  path: string;
+  size: number;
+  uploadedAt: string;
+}
+interface UploadsStatusData {
+  files: UploadRow[];
+  usageBytes: number;
+  limitBytes: number;
+  warning: boolean;
+}
+function formatUploadBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+function UploadsSection() {
+  const { api, notify } = useWorkspace();
+  const [status, setStatus] = useState<UploadsStatusData>();
+  const [failed, setFailed] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  async function load() {
+    try {
+      setStatus(await api.request<UploadsStatusData>("/api/uploads"));
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  async function remove(name: string) {
+    try {
+      setStatus(
+        await api.request<UploadsStatusData>(
+          `/api/uploads/${encodeURIComponent(name)}`,
+          undefined,
+          "DELETE",
+        ),
+      );
+      notify(`Deleted ${name}.`);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+      await load();
+    }
+  }
+  async function clearAll() {
+    if (!confirmingClear) {
+      setConfirmingClear(true);
+      return;
+    }
+    try {
+      setStatus(await api.request<UploadsStatusData>("/api/uploads", undefined, "DELETE"));
+      setConfirmingClear(false);
+      notify("Uploads cleared.");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+    }
+  }
+  if (failed) return null;
+  const percent = status
+    ? Math.min(100, Math.round((status.usageBytes / status.limitBytes) * 100))
+    : 0;
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={[s.small, { marginLeft: 12 }]}>Uploads</Text>
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          borderRadius: 23,
+          backgroundColor: "#F3F4F5",
+          gap: 10,
+        }}
+      >
+        {status === undefined ? (
+          <View style={[s.row, { minHeight: 40 }]}>
+            <ActivityIndicator />
+          </View>
+        ) : (
+          <>
+            <View style={{ gap: 6 }}>
+              <Text style={s.text}>
+                {formatUploadBytes(status.usageBytes)} of {formatUploadBytes(status.limitBytes)}{" "}
+                used
+              </Text>
+              <View style={{ height: 6, borderRadius: 3, backgroundColor: "#E5E7E9" }}>
+                <View
+                  style={{
+                    height: 6,
+                    borderRadius: 3,
+                    width: `${percent}%`,
+                    backgroundColor: status.warning ? "#D97706" : colors.blue,
+                  }}
+                />
+              </View>
+              {status.warning && (
+                <Text style={s.small}>
+                  Over 75% full. Clear space soon so new uploads are not rejected.
+                </Text>
+              )}
+            </View>
+            {status.files.length ? (
+              status.files.map((file) => (
+                <View key={file.name} style={[s.row, { gap: 10 }]}>
+                  <FileText size={17} color="#6866A6" />
+                  <View style={{ flex: 1, gap: 1 }}>
+                    <Text style={s.text} numberOfLines={1}>
+                      {file.name}
+                    </Text>
+                    <Text style={s.small}>{formatUploadBytes(file.size)}</Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${file.name}`}
+                    hitSlop={8}
+                    onPress={() => void remove(file.name)}
+                  >
+                    <Trash2 size={17} color={colors.muted} />
+                  </Pressable>
+                </View>
+              ))
+            ) : (
+              <Text style={s.muted}>
+                Nothing uploaded yet. Attach a file in chat and it will be stored here.
+              </Text>
+            )}
+            {status.files.length > 0 && (
+              <Button small danger onPress={() => void clearAll()}>
+                {confirmingClear
+                  ? `Tap again to delete all ${status.files.length} files`
+                  : "Clear all uploads"}
+              </Button>
+            )}
+          </>
+        )}
+      </View>
+      <Text style={[s.small, { marginLeft: 12 }]}>
+        Files attached in chat are copied here so tools can open them by path. Deleting here never
+        touches the original file.
       </Text>
     </View>
   );

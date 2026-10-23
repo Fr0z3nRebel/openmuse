@@ -17,7 +17,7 @@ import { createAuth } from "./auth.ts";
 import { BrowserService } from "./browser.ts";
 import { ComputerService, type DockerRunner } from "./computer.ts";
 import { computerRoutes } from "./computer-routes.ts";
-import { assertApiDeploymentConfig, type Config } from "./config.ts";
+import { assertApiDeploymentConfig, type Config, defaultUploadsLimitBytes } from "./config.ts";
 import type { Store } from "./db.ts";
 import { agentRoutes } from "./engine/routes.ts";
 import { AgentService } from "./engine/service.ts";
@@ -26,6 +26,7 @@ import { Files } from "./files.ts";
 import { GoogleAuth } from "./google-auth.ts";
 import { mcpInstallSchema } from "./mcp.ts";
 import { rateLimit } from "./rate-limit.ts";
+import { UploadsService } from "./uploads.ts";
 import { WorkspaceService } from "./workspace.ts";
 
 export async function createApp(
@@ -47,6 +48,7 @@ export async function createApp(
   });
   const browser = new BrowserService(db, config, auth, files);
   const computer = new ComputerService(db, config, options.docker);
+  const uploads = new UploadsService(config);
   const agent = new AgentService(db, config, workspace, files, actions, browser, computer);
   const intelligence = new CopilotKitIntelligence({ apiKey: config.intelligenceApiKey });
   const runtime = makeRuntime(config, agent, auth, intelligence);
@@ -69,11 +71,20 @@ export async function createApp(
       credentials: true,
     }),
   );
+  const requestBodyLimit = bodyLimit({
+    maxSize: 12 * 1024 * 1024,
+    onError: (c) => c.json({ error: "Request is too large; PDFs must be 10 MB or smaller" }, 413),
+  });
+  app.use("*", async (c, next) => {
+    // Chat uploads carry whole files; the uploads policy sets their limit instead.
+    if (c.req.method === "POST" && c.req.path === "/api/uploads") return next();
+    return requestBodyLimit(c, next);
+  });
   app.use(
-    "*",
+    "/api/uploads",
     bodyLimit({
-      maxSize: 12 * 1024 * 1024,
-      onError: (c) => c.json({ error: "Request is too large; PDFs must be 10 MB or smaller" }, 413),
+      maxSize: config.uploadsLimitBytes ?? defaultUploadsLimitBytes,
+      onError: (c) => c.json({ error: "That file is larger than the uploads limit" }, 413),
     }),
   );
   app.use("/api/*", rateLimit(Boolean(config.trustProxy)));
@@ -305,6 +316,17 @@ export async function createApp(
     if (!config.mcpEnabled) throw new AppError("MCP support is disabled", 404);
     return c.json(await agent.mcp.remove(c.req.param("name")));
   });
+  app.get("/api/uploads", async (c) => c.json(await uploads.status()));
+  app.post("/api/uploads", async (c) => {
+    const data = await c.req.parseBody();
+    const file = data.file;
+    if (!(file instanceof File)) throw new AppError("Choose a file to upload");
+    return c.json(await uploads.save(file.name, new Uint8Array(await file.arrayBuffer())), 201);
+  });
+  app.delete("/api/uploads", async (c) => c.json(await uploads.clear()));
+  app.delete("/api/uploads/:name", async (c) =>
+    c.json(await uploads.remove(c.req.param("name"))),
+  );
   app.post("/api/browsers", async (c) => {
     const body = z.object({ url: z.url().max(4096) }).parse(await c.req.json());
     return c.json(await browser.create(c.get("owner"), body.url), 201);

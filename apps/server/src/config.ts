@@ -53,6 +53,7 @@ export interface Config {
   webSearchEnabled?: boolean;
   mcpEnabled?: boolean;
   mcpConfigPath?: string;
+  uploadsLimitBytes?: number;
   computerEnabled?: boolean;
   computerImage?: string;
   computerDeploymentId?: string;
@@ -67,6 +68,9 @@ export type ComputerProvider = "docker" | "e2b-desktop";
 
 /** Pinned so live rankings do not shift when TypeSafe moves the `jev-latest` alias. */
 export const defaultJevModel = "jev-1.13.0";
+
+/** Default total size cap for the chat uploads folder: 5 GiB. */
+export const defaultUploadsLimitBytes = 5 * 1024 * 1024 * 1024;
 
 export const intelligenceKeyRequiredMessage =
   "OpenMuse requires CPK_INTELLIGENCE_API_KEY. " +
@@ -161,6 +165,10 @@ export function readConfig(): Config {
     webSearchEnabled: process.env.WEB_SEARCH_ENABLED !== "false",
     mcpEnabled: process.env.MCP_ENABLED !== "false",
     mcpConfigPath: process.env.MCP_CONFIG_PATH?.trim() || undefined,
+    uploadsLimitBytes:
+      Number(process.env.UPLOADS_LIMIT_BYTES) > 0
+        ? Math.floor(Number(process.env.UPLOADS_LIMIT_BYTES))
+        : defaultUploadsLimitBytes,
     computerEnabled: process.env.COMPUTER_ENABLED === "true",
     computerImage: process.env.COMPUTER_IMAGE ?? "openmuse-computer:local",
     computerDeploymentId: process.env.COMPUTER_DEPLOYMENT_ID,

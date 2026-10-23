@@ -7,7 +7,7 @@ import {
   useRenderTool,
   useRenderToolCall,
 } from "@copilotkit/react-native/headless";
-import { ArrowDown, ArrowUp, FileText, RotateCcw, Square, X } from "lucide-react-native";
+import { ArrowDown, ArrowUp, FileText, RotateCcw, Square, Upload, X } from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   Keyboard,
@@ -20,6 +20,7 @@ import {
   type TextStyle,
   View,
 } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
 import { z } from "zod";
 import { ArtifactCard } from "./agent-ui";
 import { useAgentWorkspace } from "./agent-workspace";
@@ -203,6 +204,11 @@ function ServerToolCard({
     </Card>
   );
 }
+interface UploadedAttachment {
+  name: string;
+  path: string;
+  size: number;
+}
 export function ChatScreen({
   prompt,
   thread,
@@ -212,7 +218,7 @@ export function ChatScreen({
   thread?: Selection;
   active?: boolean;
 }) {
-  const { api, workspace: w, refresh, navigate } = useWorkspace();
+  const { api, workspace: w, refresh, navigate, notify } = useWorkspace();
   const { data: agentWorkspace, refresh: refreshAgent } = useAgentWorkspace();
   const { enabled: richThreads, mainId, claimPrompt } = useMuseThread();
   const selection = thread || { id: "local", existing: false };
@@ -232,6 +238,8 @@ export function ChatScreen({
   const [syncing, setSyncing] = useState(false);
   const [picking, setPicking] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [uploads, setUploads] = useState<UploadedAttachment[]>([]);
+  const [uploading, setUploading] = useState(0);
   const list = useRef<ScrollView>(null);
   const [queue] = useState(() => new ConversationQueue());
   const choiceCompletions = useRef(
@@ -456,23 +464,104 @@ export function ChatScreen({
   }
   function send() {
     const text = draft.trim();
-    if (!text || !isReady || !loaded) return;
+    if ((!text && !uploads.length) || !isReady || !loaded) return;
     // A new submission can continue after Stop; held follow-ups still need explicit resume.
     if (!busy && !agent.isRunning && !saveError && !queue.getSnapshot().pending.length)
       queue.resume();
     setShowResults(false);
     const files = w.files.filter((f) => attachments.includes(f.id));
-    enqueue(
-      text +
-        (files.length
-          ? `\n\nAttached documents: ${files.map((f) => `${f.name} (artifact ID: ${f.id})`).join(", ")}`
-          : ""),
-    );
+    const parts = [text];
+    if (files.length)
+      parts.push(
+        `Attached documents: ${files.map((f) => `${f.name} (artifact ID: ${f.id})`).join(", ")}`,
+      );
+    if (uploads.length) parts.push(uploads.map((f) => `Attached file: ${f.path}`).join("\n"));
+    enqueue(parts.filter(Boolean).join("\n\n"));
     setDraft("");
     setInputHeight(44);
     setAttachments([]);
+    setUploads([]);
     setPicking(false);
   }
+  const uploadFiles = useCallback(
+    async (files: Iterable<Blob | { uri: string; name: string; type: string }>) => {
+      for (const file of files) {
+        setUploading((count) => count + 1);
+        try {
+          const form = new FormData();
+          if (file instanceof Blob) {
+            const named = file as Blob & { name?: string };
+            form.append(
+              "file",
+              file,
+              named.name ||
+                `pasted-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.png`,
+            );
+          } else form.append("file", file as unknown as Blob);
+          const result = await api.request<{ file: UploadedAttachment; warning: boolean }>(
+            "/api/uploads",
+            form,
+          );
+          setUploads((current) => [...current, result.file]);
+          if (result.warning)
+            notify("Uploads storage is over 75% full. Clear space in Settings soon.");
+        } catch (e) {
+          notify(e instanceof Error ? e.message : String(e));
+        } finally {
+          setUploading((count) => count - 1);
+        }
+      }
+    },
+    [api, notify],
+  );
+  async function pickFiles() {
+    if (Platform.OS === "web") {
+      if (typeof document === "undefined") return;
+      const input = document.createElement("input");
+      input.type = "file";
+      input.multiple = true;
+      input.onchange = () => {
+        if (input.files?.length) void uploadFiles(Array.from(input.files));
+        setPicking(false);
+      };
+      input.click();
+      return;
+    }
+    const picked = await DocumentPicker.getDocumentAsync({ multiple: true });
+    if (picked.canceled) return;
+    void uploadFiles(
+      picked.assets.map((asset) => ({
+        uri: asset.uri,
+        name: asset.name,
+        type: asset.mimeType ?? "application/octet-stream",
+      })),
+    );
+    setPicking(false);
+  }
+  useEffect(() => {
+    if (Platform.OS !== "web" || !active) return;
+    const onDragOver = (event: DragEvent) => event.preventDefault();
+    const onDrop = (event: DragEvent) => {
+      const files = event.dataTransfer?.files;
+      if (!files?.length) return;
+      event.preventDefault();
+      void uploadFiles(Array.from(files));
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      const files = event.clipboardData?.files;
+      if (!files?.length) return;
+      event.preventDefault();
+      void uploadFiles(Array.from(files));
+    };
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("drop", onDrop);
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("drop", onDrop);
+      document.removeEventListener("paste", onPaste);
+    };
+  }, [active, uploadFiles]);
   const messages = agent.messages || [];
   const latestPanelId = latestJevPanelId(messages, threadId);
   const latestUserIndex = messages.reduce(
@@ -828,6 +917,14 @@ export function ChatScreen({
         {picking && (
           <Card style={{ marginBottom: 12, padding: 15 }}>
             <Text style={s.heading}>Add a document</Text>
+            <Button
+              small
+              icon={Upload}
+              onPress={() => void pickFiles()}
+              style={{ alignSelf: "flex-start", marginVertical: 10 }}
+            >
+              Upload a file…
+            </Button>
             <ScrollView style={{ maxHeight: 230 }} keyboardShouldPersistTaps="handled">
               {w.files.length ? (
                 w.files.map((f) => (
@@ -845,7 +942,9 @@ export function ChatScreen({
                   />
                 ))
               ) : (
-                <Text style={s.muted}>Import a PDF in Files to use it in a conversation.</Text>
+                <Text style={s.muted}>
+                  No workspace documents yet. Upload a file above to attach it right away.
+                </Text>
               )}
             </ScrollView>
             <Button
@@ -871,7 +970,7 @@ export function ChatScreen({
             elevation: 4,
           }}
         >
-          {attachments.length > 0 && (
+          {(attachments.length > 0 || uploads.length > 0 || uploading > 0) && (
             <View style={[s.row, { gap: 6, flexWrap: "wrap", padding: 9 }]}>
               {w.files
                 .filter((f) => attachments.includes(f.id))
@@ -903,6 +1002,34 @@ export function ChatScreen({
                     <X size={13} color={colors.muted} />
                   </Pressable>
                 ))}
+              {uploads.map((file) => (
+                <Pressable
+                  key={file.path}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove uploaded file: ${file.name}`}
+                  onPress={() =>
+                    setUploads((current) => current.filter((item) => item.path !== file.path))
+                  }
+                  style={[
+                    s.row,
+                    {
+                      gap: 7,
+                      maxWidth: "100%",
+                      backgroundColor: colors.sky,
+                      borderRadius: 16,
+                      paddingHorizontal: 11,
+                      paddingVertical: 8,
+                    },
+                  ]}
+                >
+                  <FileText size={14} color={colors.blueDark} />
+                  <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 12, color: colors.text }}>
+                    {file.name}
+                  </Text>
+                  <X size={13} color={colors.muted} />
+                </Pressable>
+              ))}
+              {uploading > 0 && <Text style={s.small}>Uploading…</Text>}
             </View>
           )}
           <View style={[s.row, { gap: 7, alignItems: "flex-end" }]}>
@@ -976,13 +1103,13 @@ export function ChatScreen({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={replying ? "Stop reply" : "Send message"}
-              disabled={!replying && (!draft.trim() || !loaded || !isReady)}
+              disabled={!replying && ((!draft.trim() && !uploads.length) || !loaded || !isReady)}
               onPress={replying ? () => void stop() : send}
               style={({ pressed }) => ({
                 width: 44,
                 height: 44,
                 borderRadius: 24,
-                backgroundColor: replying || draft.trim() ? colors.blue : "#F3F5F6",
+                backgroundColor: replying || draft.trim() || uploads.length ? colors.blue : "#F3F5F6",
                 alignItems: "center",
                 justifyContent: "center",
                 transform: [{ scale: pressed ? 0.94 : 1 }],
@@ -994,7 +1121,7 @@ export function ChatScreen({
                 <ArrowUp
                   size={25}
                   strokeWidth={1.8}
-                  color={draft.trim() ? colors.text : "#9CB5C5"}
+                  color={draft.trim() || uploads.length ? colors.text : "#9CB5C5"}
                 />
               )}
             </Pressable>
