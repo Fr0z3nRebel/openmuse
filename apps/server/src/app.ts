@@ -21,6 +21,7 @@ import { assertApiDeploymentConfig, type Config, defaultUploadsLimitBytes } from
 import type { Store } from "./db.ts";
 import { agentRoutes } from "./engine/routes.ts";
 import { AgentService } from "./engine/service.ts";
+import { generateThreadTitle } from "./engine/thread-title.ts";
 import { AppError } from "./errors.ts";
 import { Files } from "./files.ts";
 import { GoogleAuth } from "./google-auth.ts";
@@ -347,6 +348,21 @@ export async function createApp(
     return c.json(
       await agent.models.setThreadModel(c.get("owner"), c.req.param("threadId"), body.model),
     );
+  });
+  app.post("/api/threads/:threadId/title", async (c) => {
+    const body = z
+      .object({
+        user: z.string().max(4000).default(""),
+        assistant: z.string().max(4000).default(""),
+      })
+      .parse(await c.req.json());
+    const title = await generateThreadTitle(
+      agent.models,
+      c.get("owner"),
+      c.req.param("threadId"),
+      body,
+    );
+    return c.json({ title });
   });
   app.post("/api/browsers", async (c) => {
     const body = z.object({ url: z.url().max(4096) }).parse(await c.req.json());

@@ -6,6 +6,7 @@ import {
   useCopilotKit,
   useRenderTool,
   useRenderToolCall,
+  useThreads,
 } from "@copilotkit/react-native/headless";
 import * as DocumentPicker from "expo-document-picker";
 import {
@@ -230,6 +231,16 @@ interface ModelOption {
 }
 function shortModelName(spec: string): string {
   return spec.includes("/") ? spec.slice(spec.indexOf("/") + 1) : spec;
+}
+function fallbackThreadTitle(userText: string): string {
+  const cleaned = userText
+    .split(/\r?\n/)
+    .filter((line) => !/^Attached (file|documents):/.test(line.trim()))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "";
+  return cleaned.length > 60 ? `${cleaned.slice(0, 59).trimEnd()}…` : cleaned;
 }
 function ModelRow({ label, onPress }: { label: string; onPress: () => void }) {
   return (
@@ -620,6 +631,64 @@ export function ChatScreen({
       live = false;
     };
   }, [active, api, threadId]);
+  const threadList = useThreads({
+    agentId: "default",
+    enabled: richThreads,
+    includeArchived: true,
+    limit: 20,
+  });
+  const threadsRef = useRef(threadList.threads);
+  useEffect(() => {
+    threadsRef.current = threadList.threads;
+  }, [threadList.threads]);
+  const titleAttempted = useRef(new Set<string>());
+  const wasReplying = useRef(false);
+  async function ensureThreadTitle() {
+    if (!richThreads || threadId === mainId || titleAttempted.current.has(threadId)) return;
+    try {
+      threadList.refetchThreads();
+      let thread = threadList.threads.find((item) => item.id === threadId);
+      if (!thread) {
+        // The list can lag a brand-new chat; give the refetch a moment, then
+        // check the latest list once more before giving up for this turn.
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        thread = threadsRef.current.find((item) => item.id === threadId);
+      }
+      if (!thread) return; // Still not listed; a later turn retries.
+      titleAttempted.current.add(threadId);
+      if (thread.name) return;
+      const firstUser = agent.messages.find(
+        (message) => message.role === "user" && typeof message.content === "string",
+      );
+      const userText = typeof firstUser?.content === "string" ? firstUser.content : "";
+      if (!userText) return;
+      const firstAssistant = agent.messages.find(
+        (message) => message.role === "assistant" && typeof message.content === "string",
+      );
+      const assistantText =
+        typeof firstAssistant?.content === "string" ? firstAssistant.content : "";
+      let title = "";
+      try {
+        const result = await api.request<{ title: string }>(
+          `/api/threads/${encodeURIComponent(threadId)}/title`,
+          { user: userText.slice(0, 2000), assistant: assistantText.slice(0, 2000) },
+          "POST",
+        );
+        title = result.title.trim();
+      } catch {
+        title = "";
+      }
+      if (!title) title = fallbackThreadTitle(userText);
+      if (title) await threadList.renameThread(threadId, title);
+    } catch {
+      // Titling is cosmetic; failures stay silent.
+    }
+  }
+  useEffect(() => {
+    const replyingNow = busy || agent.isRunning;
+    if (wasReplying.current && !replyingNow) void ensureThreadTitle();
+    wasReplying.current = replyingNow;
+  }, [busy, agent.isRunning]);
   async function chooseModel(spec: string | null) {
     try {
       const updated = await api.request<ChatModelInfo>(
