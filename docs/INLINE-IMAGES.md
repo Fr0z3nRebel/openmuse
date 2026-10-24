@@ -17,6 +17,10 @@ text placeholder.
 
 - Tapping or clicking an image opens the full-size version: a new tab on
   web, the system browser in the app.
+- Each image URL renders as a picture once per message. A repeat of the
+  same URL (the model often embeds an image and then mentions its URL in
+  plain text) renders as a normal text link, so the URL stays visible and
+  copyable without a duplicate picture.
 - Only `http:` and `https:` URLs render (`isSafeAssistantUrl` in
   `assistant-markdown.ts`). Any other URL, and any image that fails to
   load, falls back to the `[Image: alt]` text label.
@@ -26,3 +30,13 @@ text placeholder.
 `apps/mobile/src/assistant-response.tsx`: the `image` and `link` render
 rules plus the `InlineImage` component. It applies everywhere assistant
 markdown is rendered.
+
+## What the agent is told
+
+The chat system prompt (`apps/server/src/engine/conversation.ts`) tells the
+model this chat renders images inline: when a tool result includes an image
+URL (for example an Artistly CDN URL), it embeds the image with
+`![short description](url)` on its own line and mentions the URL in plain
+text too, and it never claims it cannot display images in chat. Only URLs
+render, so when a result has both a CDN URL and a local file path, the
+model is told to embed the URL.

@@ -80,18 +80,35 @@ export function AssistantResponse({ content }: { content: string }) {
     );
     return false;
   }, []);
+  // One picture per URL per message: a later mention of the same image (the
+  // model often adds the URL in plain text after embedding it) renders as a
+  // normal text link instead of a second copy of the picture.
+  const shownImages = new Set<string>();
+  const claimImage = (src: string) => {
+    if (shownImages.has(src)) return false;
+    shownImages.add(src);
+    return true;
+  };
   const rules: RenderRules = {
     textgroup: (node, children) => (
       <Text key={node.key} selectable style={textStyle}>
         {children}
       </Text>
     ),
-    image: (node) => (
-      <InlineImage key={node.key} src={node.attributes.src ?? ""} alt={node.attributes.alt} />
-    ),
+    image: (node, _children, _parent, styles) => {
+      const src = node.attributes.src ?? "";
+      if (isSafeAssistantUrl(src) && !claimImage(src)) {
+        return (
+          <Text key={node.key} style={styles.link as TextStyle} onPress={() => onLinkPress(src)}>
+            {node.attributes.alt || src}
+          </Text>
+        );
+      }
+      return <InlineImage key={node.key} src={src} alt={node.attributes.alt} />;
+    },
     link: (node, children, _parent, styles) => {
       const href = node.attributes.href ?? "";
-      if (imageUrlPattern.test(href)) {
+      if (imageUrlPattern.test(href) && claimImage(href)) {
         return <InlineImage key={node.key} src={href} />;
       }
       return (
