@@ -231,6 +231,17 @@ interface ModelOption {
 function shortModelName(spec: string): string {
   return spec.includes("/") ? spec.slice(spec.indexOf("/") + 1) : spec;
 }
+function ModelRow({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [{ paddingVertical: 9 }, pressed && { opacity: 0.6 }]}
+    >
+      <Text style={s.text}>{label}</Text>
+    </Pressable>
+  );
+}
 export function ChatScreen({
   prompt,
   thread,
@@ -631,10 +642,6 @@ export function ChatScreen({
         notify(
           `Heads up: this chat is long (about ${estimate.toLocaleString()} tokens) and ${entry.name} has a ${entry.contextLength.toLocaleString()}-token window, so the earliest messages may be cut off.`,
         );
-      else if (spec)
-        notify(`This chat now uses ${shortModelName(chosen)}. It applies to the next message.`);
-      else
-        notify(`This chat is back to the default model (${shortModelName(updated.defaultSpec)}).`);
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e));
     }
@@ -995,15 +1002,13 @@ export function ChatScreen({
           <Card style={{ marginBottom: 12, padding: 15 }}>
             <Text style={s.heading}>Model for this chat</Text>
             <ScrollView style={{ maxHeight: 230 }} keyboardShouldPersistTaps="handled">
-              <CheckRow
-                checked={chatModel.source === "default"}
+              <ModelRow
                 label={`Default (${shortModelName(chatModel.defaultSpec)})`}
                 onPress={() => void chooseModel(null)}
               />
               {modelOptions.map((model) => (
-                <CheckRow
+                <ModelRow
                   key={model.spec}
-                  checked={chatModel.source === "thread" && chatModel.spec === model.spec}
                   label={
                     model.contextLength
                       ? `${model.name} · ${Math.round(model.contextLength / 1000)}k context`
