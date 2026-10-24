@@ -32,6 +32,7 @@ import { AppError } from "../errors.ts";
 import type { Files } from "../files.ts";
 import { backgroundFailure } from "../log.ts";
 import { McpService } from "../mcp.ts";
+import { ModelSettingsService } from "../model-settings.ts";
 import { SearchService } from "../search.ts";
 import type { WorkspaceService } from "../workspace.ts";
 import { analyzeSpending } from "./finance.ts";
@@ -54,6 +55,7 @@ export class AgentService {
   readonly worker: TaskWorker;
   readonly search: SearchService;
   readonly mcp: McpService;
+  readonly models: ModelSettingsService;
   private maintenance?: ReturnType<typeof setInterval>;
   private refreshing = false;
   constructor(
@@ -67,6 +69,7 @@ export class AgentService {
   ) {
     this.search = new SearchService(db);
     this.mcp = new McpService(config);
+    this.models = new ModelSettingsService(db, config);
     this.worker = new TaskWorker(db, (owner, task, context) => this.execute(owner, task, context), {
       settled: (owner, task) => this.publishOutcome(owner, task),
     });

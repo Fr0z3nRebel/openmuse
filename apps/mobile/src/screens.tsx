@@ -1322,6 +1322,7 @@ export function ConnectionsScreen({ query = "" }: { query?: string }) {
       })}
       <McpServersSection />
       <UploadsSection />
+      <ModelSettingsSection />
       {!rows.length && <Text style={s.muted}>No matching connectors.</Text>}
       {selected && (
         <Sheet
@@ -1503,6 +1504,161 @@ function McpServersSection() {
       </View>
       <Text style={[s.small, { marginLeft: 12 }]}>
         Turning a server off removes its tools from the model's context on the next message.
+      </Text>
+    </View>
+  );
+}
+interface ModelSettingsData {
+  provider: string;
+  ollamaHost: string;
+  ollamaPort: number;
+  defaultModel: string;
+}
+interface ModelListEntryData {
+  name: string;
+  spec: string;
+  contextLength?: number;
+}
+interface ModelListData {
+  models: ModelListEntryData[];
+  defaultSpec: string;
+  error?: string;
+}
+function ModelSettingsSection() {
+  const { api, notify } = useWorkspace();
+  const [list, setList] = useState<ModelListData>();
+  const [failed, setFailed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
+  async function load() {
+    try {
+      const [saved, models] = await Promise.all([
+        api.request<ModelSettingsData>("/api/settings/model"),
+        api.request<ModelListData>("/api/models"),
+      ]);
+      setHost(saved.ollamaHost);
+      setPort(String(saved.ollamaPort));
+      setDefaultModel(saved.defaultModel);
+      setList(models);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  async function save() {
+    setSaving(true);
+    try {
+      const saved = await api.request<ModelSettingsData>(
+        "/api/settings/model",
+        { ollamaHost: host.trim(), ollamaPort: Number(port), defaultModel: defaultModel.trim() },
+        "PUT",
+      );
+      setHost(saved.ollamaHost);
+      setPort(String(saved.ollamaPort));
+      setDefaultModel(saved.defaultModel);
+      setList(await api.request<ModelListData>("/api/models"));
+      notify("Model settings saved. New chats start with the default model.");
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+  if (failed) return null;
+  const inputStyle = {
+    backgroundColor: "#FFF",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 14,
+    color: colors.text,
+  } as const;
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={[s.small, { marginLeft: 12 }]}>Model</Text>
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingVertical: 12,
+          borderRadius: 23,
+          backgroundColor: "#F3F4F5",
+          gap: 10,
+        }}
+      >
+        {list === undefined ? (
+          <View style={[s.row, { minHeight: 40 }]}>
+            <ActivityIndicator />
+          </View>
+        ) : (
+          <>
+            <Text style={s.text}>Ollama</Text>
+            <View style={[s.row, { gap: 8 }]}>
+              <View style={{ flex: 2, gap: 4 }}>
+                <Text style={s.small}>Host</Text>
+                <TextInput
+                  value={host}
+                  onChangeText={setHost}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="127.0.0.1"
+                  style={inputStyle}
+                />
+              </View>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text style={s.small}>Port</Text>
+                <TextInput
+                  value={port}
+                  onChangeText={setPort}
+                  keyboardType="number-pad"
+                  placeholder="11434"
+                  style={inputStyle}
+                />
+              </View>
+            </View>
+            {list.error ? (
+              <Text style={s.small}>{list.error}</Text>
+            ) : (
+              <Text style={s.small}>Connected · {list.models.length} models installed</Text>
+            )}
+            <Text style={s.small}>Default model (new chats start with it)</Text>
+            {list.models.map((model) => (
+              <Pressable
+                key={model.spec}
+                accessibilityRole="button"
+                accessibilityLabel={`Use ${model.name} as the default model`}
+                onPress={() => setDefaultModel(model.name)}
+                style={[s.row, { gap: 10 }]}
+              >
+                {defaultModel === model.name ? (
+                  <Check size={16} color={colors.blueDark} />
+                ) : (
+                  <View style={{ width: 16 }} />
+                )}
+                <Text style={s.text}>{model.name}</Text>
+                {!!model.contextLength && (
+                  <Text style={s.small}>{Math.round(model.contextLength / 1000)}k context</Text>
+                )}
+              </Pressable>
+            ))}
+            {!!defaultModel && !list.models.some((model) => model.name === defaultModel) && (
+              <Text style={s.small}>
+                Current default: {defaultModel} (not in Ollama's list right now)
+              </Text>
+            )}
+            <Button small primary busy={saving} onPress={() => void save()}>
+              Save model settings
+            </Button>
+          </>
+        )}
+      </View>
+      <Text style={[s.small, { marginLeft: 12 }]}>
+        Any chat can switch models from its model chip; the switch applies to the next message and
+        keeps the conversation's history.
       </Text>
     </View>
   );

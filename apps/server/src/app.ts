@@ -324,9 +324,30 @@ export async function createApp(
     return c.json(await uploads.save(file.name, new Uint8Array(await file.arrayBuffer())), 201);
   });
   app.delete("/api/uploads", async (c) => c.json(await uploads.clear()));
-  app.delete("/api/uploads/:name", async (c) =>
-    c.json(await uploads.remove(c.req.param("name"))),
+  app.delete("/api/uploads/:name", async (c) => c.json(await uploads.remove(c.req.param("name"))));
+  app.get("/api/settings/model", async (c) => c.json(await agent.models.settings(c.get("owner"))));
+  app.put("/api/settings/model", async (c) => {
+    const body = z
+      .object({
+        ollamaHost: z.string().trim().min(1).max(255),
+        ollamaPort: z.coerce.number().int().min(1).max(65535),
+        defaultModel: z.string().trim().min(1).max(200),
+      })
+      .parse(await c.req.json());
+    return c.json(await agent.models.save(c.get("owner"), body));
+  });
+  app.get("/api/models", async (c) => c.json(await agent.models.listModels(c.get("owner"))));
+  app.get("/api/threads/:threadId/model", async (c) =>
+    c.json(await agent.models.threadModel(c.get("owner"), c.req.param("threadId"))),
   );
+  app.put("/api/threads/:threadId/model", async (c) => {
+    const body = z
+      .object({ model: z.string().trim().min(1).max(200).nullable() })
+      .parse(await c.req.json());
+    return c.json(
+      await agent.models.setThreadModel(c.get("owner"), c.req.param("threadId"), body.model),
+    );
+  });
   app.post("/api/browsers", async (c) => {
     const body = z.object({ url: z.url().max(4096) }).parse(await c.req.json());
     return c.json(await browser.create(c.get("owner"), body.url), 201);

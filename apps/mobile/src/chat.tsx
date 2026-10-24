@@ -7,7 +7,17 @@ import {
   useRenderTool,
   useRenderToolCall,
 } from "@copilotkit/react-native/headless";
-import { ArrowDown, ArrowUp, FileText, RotateCcw, Square, Upload, X } from "lucide-react-native";
+import * as DocumentPicker from "expo-document-picker";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  FileText,
+  RotateCcw,
+  Square,
+  Upload,
+  X,
+} from "lucide-react-native";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   Keyboard,
@@ -20,7 +30,6 @@ import {
   type TextStyle,
   View,
 } from "react-native";
-import * as DocumentPicker from "expo-document-picker";
 import { z } from "zod";
 import { ArtifactCard } from "./agent-ui";
 import { useAgentWorkspace } from "./agent-workspace";
@@ -209,6 +218,19 @@ interface UploadedAttachment {
   path: string;
   size: number;
 }
+interface ChatModelInfo {
+  spec: string;
+  source: "thread" | "default";
+  defaultSpec: string;
+}
+interface ModelOption {
+  name: string;
+  spec: string;
+  contextLength?: number;
+}
+function shortModelName(spec: string): string {
+  return spec.includes("/") ? spec.slice(spec.indexOf("/") + 1) : spec;
+}
 export function ChatScreen({
   prompt,
   thread,
@@ -240,6 +262,10 @@ export function ChatScreen({
   const [attachments, setAttachments] = useState<string[]>([]);
   const [uploads, setUploads] = useState<UploadedAttachment[]>([]);
   const [uploading, setUploading] = useState(0);
+  const [chatModel, setChatModel] = useState<ChatModelInfo>();
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
+  const [modelsError, setModelsError] = useState("");
+  const [modelPicking, setModelPicking] = useState(false);
   const list = useRef<ScrollView>(null);
   const [queue] = useState(() => new ConversationQueue());
   const choiceCompletions = useRef(
@@ -562,6 +588,57 @@ export function ChatScreen({
       document.removeEventListener("paste", onPaste);
     };
   }, [active, uploadFiles]);
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    void (async () => {
+      try {
+        const [current, list] = await Promise.all([
+          api.request<ChatModelInfo>(`/api/threads/${encodeURIComponent(threadId)}/model`),
+          api.request<{ models: ModelOption[]; error?: string }>("/api/models"),
+        ]);
+        if (!live) return;
+        setChatModel(current);
+        setModelOptions(list.models);
+        setModelsError(list.error ?? "");
+      } catch {
+        // The picker stays hidden when the model endpoints are unavailable.
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [active, api, threadId]);
+  async function chooseModel(spec: string | null) {
+    try {
+      const updated = await api.request<ChatModelInfo>(
+        `/api/threads/${encodeURIComponent(threadId)}/model`,
+        { model: spec },
+        "PUT",
+      );
+      setChatModel(updated);
+      setModelPicking(false);
+      const chosen = spec ?? updated.defaultSpec;
+      const entry = modelOptions.find((model) => model.spec === chosen);
+      const estimate = Math.ceil(
+        agent.messages.reduce(
+          (total, message) =>
+            total + (typeof message.content === "string" ? message.content.length : 0),
+          0,
+        ) / 4,
+      );
+      if (entry?.contextLength && estimate > entry.contextLength)
+        notify(
+          `Heads up: this chat is long (about ${estimate.toLocaleString()} tokens) and ${entry.name} has a ${entry.contextLength.toLocaleString()}-token window, so the earliest messages may be cut off.`,
+        );
+      else if (spec)
+        notify(`This chat now uses ${shortModelName(chosen)}. It applies to the next message.`);
+      else
+        notify(`This chat is back to the default model (${shortModelName(updated.defaultSpec)}).`);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+    }
+  }
   const messages = agent.messages || [];
   const latestPanelId = latestJevPanelId(messages, threadId);
   const latestUserIndex = messages.reduce(
@@ -914,6 +991,41 @@ export function ChatScreen({
             )}
           </View>
         )}
+        {modelPicking && chatModel && (
+          <Card style={{ marginBottom: 12, padding: 15 }}>
+            <Text style={s.heading}>Model for this chat</Text>
+            <ScrollView style={{ maxHeight: 230 }} keyboardShouldPersistTaps="handled">
+              <CheckRow
+                checked={chatModel.source === "default"}
+                label={`Default (${shortModelName(chatModel.defaultSpec)})`}
+                onPress={() => void chooseModel(null)}
+              />
+              {modelOptions.map((model) => (
+                <CheckRow
+                  key={model.spec}
+                  checked={chatModel.source === "thread" && chatModel.spec === model.spec}
+                  label={
+                    model.contextLength
+                      ? `${model.name} · ${Math.round(model.contextLength / 1000)}k context`
+                      : model.name
+                  }
+                  onPress={() => void chooseModel(model.spec)}
+                />
+              ))}
+              {!!modelsError && <Text style={s.muted}>{modelsError}</Text>}
+              {!modelOptions.length && !modelsError && (
+                <Text style={s.muted}>No models found on Ollama.</Text>
+              )}
+            </ScrollView>
+            <Button
+              small
+              onPress={() => setModelPicking(false)}
+              style={{ alignSelf: "flex-end", marginTop: 8 }}
+            >
+              Done
+            </Button>
+          </Card>
+        )}
         {picking && (
           <Card style={{ marginBottom: 12, padding: 15 }}>
             <Text style={s.heading}>Add a document</Text>
@@ -955,6 +1067,33 @@ export function ChatScreen({
               Done
             </Button>
           </Card>
+        )}
+        {chatModel && (
+          <View
+            style={[s.row, { justifyContent: "flex-end", paddingHorizontal: 6, marginBottom: 6 }]}
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Choose the model for this chat"
+              accessibilityState={{ expanded: modelPicking }}
+              onPress={() => setModelPicking(!modelPicking)}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 5,
+                backgroundColor: modelPicking || pressed ? colors.sky : "#F3F5F6",
+                borderRadius: 14,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+              })}
+            >
+              <Text style={{ fontSize: 12, color: colors.blueDark }}>
+                {shortModelName(chatModel.spec)}
+                {chatModel.source === "default" ? " · default" : ""}
+              </Text>
+              <ChevronDown size={13} color={colors.blueDark} />
+            </Pressable>
+          </View>
         )}
         <View
           style={{
@@ -1023,7 +1162,10 @@ export function ChatScreen({
                   ]}
                 >
                   <FileText size={14} color={colors.blueDark} />
-                  <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 12, color: colors.text }}>
+                  <Text
+                    numberOfLines={1}
+                    style={{ flexShrink: 1, fontSize: 12, color: colors.text }}
+                  >
                     {file.name}
                   </Text>
                   <X size={13} color={colors.muted} />
@@ -1109,7 +1251,8 @@ export function ChatScreen({
                 width: 44,
                 height: 44,
                 borderRadius: 24,
-                backgroundColor: replying || draft.trim() || uploads.length ? colors.blue : "#F3F5F6",
+                backgroundColor:
+                  replying || draft.trim() || uploads.length ? colors.blue : "#F3F5F6",
                 alignItems: "center",
                 justifyContent: "center",
                 transform: [{ scale: pressed ? 0.94 : 1 }],
